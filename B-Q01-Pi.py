@@ -3,6 +3,8 @@
 from time import sleep
 from confluent_kafka import Consumer, KafkaException
 import json
+from threading import Thread
+import queue
 
 # GPIO.setmode(GPIO.BCM)            # Specify GPIO numbers instead of pin numbers
 rPin = 17
@@ -39,41 +41,31 @@ def blue():
     GPIO.output(gPin, GPIO.LOW)
     GPIO.output(bPin, GPIO.HIGH)
 
-
-# consumer = KafkaConsumer('departures',
-#                          bootstrap_servers=['localhost:9092'],
-#                          client_id='rpi-zero-python',
-#                          value_deserializer=lambda m: json.loads(m.decode('utf8')))
-# while True:
-#     print('polling kafka')
-#     messages = consumer.poll()
-#     print(messages)
-#     for message in messages['departures']:
-#         print("%s:%d:%d: key=%s value=%s" % (message.topic, message.partition,
-#                                               message.offset, message.key,
-#                                               message.value))
-#         arrivalTime = message.value["rtTime"]
-#         direction = message.value["direction"]
-#         print("time:%s  direction:%s" % (arrivalTime, direction))
-#         nextDeparture = message.value
-
-conf = {'bootstrap.servers': 'localhost:9092',
+def kafkaWorker():
+    conf = {'bootstrap.servers': 'localhost:9092',
         'group.id': 'foo',
         'auto.offset.reset': 'smallest'}
+    consumer = Consumer(conf)
 
-consumer = Consumer(conf)
+    try:
+        consumer.subscribe(['departures'])
 
-try:
-    consumer.subscribe(['departures'])
+        while True:
+            msg = consumer.poll()
+            if msg is None:
+                print('No messages to read.')
+                continue
+            if msg.error():
+                raise KafkaException(msg.error)
+            
+            arrival = json.loads(msg.value())
+            arrivalQueue.put(arrival)
+            break
+    finally:
+        consumer.close()
 
-    while True:
-        msg = consumer.poll()
-        if msg is None:
-            print('No messages to read.')
-        if msg.error():
-            raise KafkaException(msg.error)
-        
-        print(msg.value())
-        break
-finally:
-    consumer.close()
+arrivalQueue = queue.Queue()
+Thread(target=kafkaWorker, daemon=True).start()
+
+while True:
+    arrival = arrivalQueue.get_nowait()
